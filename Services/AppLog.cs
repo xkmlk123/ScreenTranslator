@@ -26,6 +26,12 @@ namespace ScreenTranslator.Services;
 /// </para>
 ///
 /// <para>
+/// 【每次启动取代上一次】启动时删掉上一次运行的日志
+/// （<see cref="DeletePreviousDiagLogs"/>），所以 <c>logs/</c> 里始终只有本次运行这一份。
+/// 想找回上一次发生了什么，看 <c>error.log</c>（崩溃堆栈单独累积，不随运行清除）。
+/// </para>
+///
+/// <para>
 /// 【体积滚动】单文件超过上限时从<strong>头部丢弃最旧内容</strong>（旧的被新的覆盖），
 /// 而不是整文件清空 —— 清空会把崩溃前刚写的那几行一起抹掉，等于白记。
 /// </para>
@@ -79,9 +85,9 @@ public static class AppLog
     /// <summary>
     /// <c>logs/</c> 下每类文件保留的最大个数，超出的按修改时间删除最旧的。
     ///
-    /// <para>只对<b>运行时日志</b>有实际意义（一次运行一个文件，需要留几份历史）。
-    /// 导出文件在导出时就被 <see cref="DeletePreviousExports"/> 收敛到只剩最新一份，
-    /// 这里对导出仅作为兜底（正常情况下永远不会触发）。</para>
+    /// <para>正常情况下两类文件都只剩最新一份（运行时日志在启动时收敛，导出在导出时收敛），
+    /// 所以这里纯粹是<strong>兜底</strong>：万一因为文件被占用等原因删除失败而堆积，
+    /// 也不会无限增长。</para>
     /// </summary>
     private const int KeepRecentFiles = 20;
 
@@ -181,12 +187,14 @@ public static class AppLog
     // =====================================================================
 
     /// <summary>
-    /// 启动时调用一次：建目录、清理超量的历史文件、对异常日志做一次滚动。
+    /// 启动时调用一次：建目录、删掉上一次运行的日志（本次启动即取代上一次）、
+    /// 清理超量的历史文件、对异常日志做一次滚动。
     /// 任何失败都静默忽略（日志系统不能成为新的故障源）。
     /// </summary>
     public static void Initialize()
     {
         try { Directory.CreateDirectory(LogDir); } catch { }
+        PreviousRunLogsRemoved = DeletePreviousDiagLogs();
         RetainRecentFiles();
         try
         {
@@ -195,6 +203,56 @@ public static class AppLog
                     $"（更早的异常记录已超出 {ErrorMaxBytes / 1024} KB 上限被丢弃）");
         }
         catch { }
+    }
+
+    /// <summary>
+    /// 本次启动删掉了几个上一次运行的日志（0 表示目录里本来就没有）。
+    /// 供启动日志如实记录用了。
+    /// </summary>
+    public static int PreviousRunLogsRemoved { get; private set; }
+
+    /// <summary>
+    /// 删除 <c>logs/</c> 下**除本次运行之外**的全部运行时诊断日志，使目录里始终只有本次运行那一份。
+    ///
+    /// <para>
+    /// 语义：运行时日志描述的是「本次运行发生了什么」，每次启动即取代上一次 ——
+    /// 这是用户明确要求的「每次打开都覆盖之前的」，与导出「只留最新一份」一致。
+    /// 由此 <c>logs/</c> 里永远只有 <strong>一个诊断日志 + 一个导出诊断</strong>，
+    /// 想找哪次运行，看文件名里的时间就知道。
+    /// </para>
+    ///
+    /// <para>
+    /// <strong>代价要知道</strong>：上一次运行的日志会被删掉。崩溃堆栈不受影响 ——
+    /// 那是单独累积的 <c>error.log</c>，本方法不碰它（见 <see cref="Error"/>）。
+    /// </para>
+    ///
+    /// <para>
+    /// 由 <see cref="Initialize"/> 在启动时调用，删除只认本程序生成的命名形状
+    /// （见 <see cref="IsGeneratedLogName"/>）。同机同时开两个实例时，
+    /// 后启动的那个会把先启动的日志删掉 —— 本程序默认单实例使用，可接受。
+    /// </para>
+    /// </summary>
+    /// <returns>实际删除的文件数（供启动日志记录/测试用）。</returns>
+    public static int DeletePreviousDiagLogs()
+    {
+        int deleted = 0;
+        try
+        {
+            if (!Directory.Exists(LogDir)) return 0;
+            string keepFull = Path.GetFullPath(DiagLogPath);
+
+            foreach (var f in Directory.GetFiles(
+                         LogDir, DiagFilePrefix + "*.txt", SearchOption.TopDirectoryOnly))
+            {
+                var fi = new FileInfo(f);
+                if (!IsGeneratedLogName(fi.Name, DiagFilePrefix)) continue;
+                if (string.Equals(fi.FullName, keepFull, StringComparison.OrdinalIgnoreCase)) continue;
+
+                try { fi.Delete(); deleted++; } catch { }
+            }
+        }
+        catch { }
+        return deleted;
     }
 
     /// <summary>

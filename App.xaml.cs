@@ -11,13 +11,18 @@ public partial class App : System.Windows.Application
         base.OnStartup(e);
 
         // ---- 日志系统初始化 ----
-        // 建立 logs/ 目录、清理超量的历史文件、对异常日志做一次体积滚动。
+        // 建立 logs/ 目录、**删掉上一次运行的日志**（本次启动即取代上一次）、
+        // 清理超量的历史文件、对异常日志做一次体积滚动。
         // 紧接着记一行「程序启动」，让本次运行的日志文件在启动瞬间就落盘 ——
         // 文件名带本次启动时刻，所以「这次是哪次」一看文件名就知道。
         AppLog.Initialize();
         AppLog.Info($"程序启动（版本 {AppLog.AppVersion}，"
                   + $"{AppLog.OsDescription} / {AppLog.ProcessBitness} / "
                   + $"{(AppLog.IsElevated ? "管理员权限" : "普通权限")}）");
+        if (AppLog.PreviousRunLogsRemoved > 0)
+            AppLog.Info($"已删除上一次运行的诊断日志 {AppLog.PreviousRunLogsRemoved} 个，"
+                      + $"本次运行只保留 {AppLog.DiagFileName}"
+                      + "（崩溃堆栈见 error.log，不随运行清除）");
 
         // ---- 全局异常兜底 ----
         // 以前程序里没有任何全局异常处理，一旦 UI 线程抛异常

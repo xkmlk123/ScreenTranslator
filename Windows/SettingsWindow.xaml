@@ -277,7 +277,7 @@
                                 Height="32" Click="OpenLogDir_Click"/>
                         <TextBlock x:Name="LogPathText" Foreground="Gray" FontSize="11"
                                    TextWrapping="Wrap" Margin="0,8,0,0"/>
-                        <TextBlock Text="本次运行的日志、历次运行的日志、崩溃记录（error.log）都在这里。日志文件名带本次运行的开始时间，看名字就知道是哪一次。「导出诊断」生成的文件只保留最新一份，每次导出会替换上一次。"
+                        <TextBlock Text="本次运行的日志、崩溃记录（error.log）都在这里。日志文件名带本次运行的开始时间，看名字就知道是哪一次。诊断日志与「导出诊断」都只保留最新一份：每次启动会替换上一次的日志，每次导出会替换上一次的导出。"
                                    Foreground="Gray" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"/>
                     </StackPanel>
                 </Border>
