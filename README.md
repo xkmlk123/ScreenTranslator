@@ -170,6 +170,17 @@ ScreenTranslator/
     └── RegionSelectWindow.xaml(.cs) 识别区域框选（Esc 取消）
 ```
 
+程序所在目录（即输出目录）在运行期会额外产生下列文件，**全部已列入 `.gitignore`**：
+
+| 文件 | 生成者 | 说明 |
+|---|---|---|
+| `config.json` | `ConfigService` | 用户配置，**含 API Key，切勿提交** |
+| `error.log` | `App.xaml.cs` 全局异常兜底 | 崩溃堆栈（原生 AV 类闪退抓不到，见第 14 章） |
+| `诊断日志.txt` | `WgcCaptureService.AppendDiagLog` | 运行期**持续追加**的证据链；超过 1MB 自动清空重写 |
+| `导出诊断.txt` | 「导出诊断」按钮 | 每次导出**整文件重写**，内容 = 状态栏 + 帧错误历史 + 实时日志全文 |
+
+> 后两者**刻意分开**，原因见第 12 章与第 17 章。
+
 ---
 
 ## 8. 技术栈与依赖
@@ -418,7 +429,7 @@ WGC 失败原因：[WGC 步骤N] xxx
 
 - **GDI 降级是安全网，不是主路径**：WGC 已跑通（见 11.6），但在**虚拟显示适配器、远程桌面 / 远程控制**等环境下仍可能触发 `DXGI_ERROR_DEVICE_HUNG`，此时程序自动降级 GDI，功能不受影响。GDI 要求目标窗口可见、未被完全遮挡，且**防截屏可能失效**（会启用临时隐藏覆盖层兜底，代价是抓帧瞬间闪一下）。详见第 11 章。
 - **目标窗口以管理员身份运行**时，本程序也必须以管理员身份运行，否则系统会拒绝捕获。
-- **导出诊断会抹掉实时日志**：`CopyDiag_Click` 每次覆盖写 `诊断日志.txt`，与 `AppendDiagLog` 写同一文件冲突，导出瞬间会把实时日志清空，导致看不到关键证据。详见第 16 章。
+- **「诊断日志」与「导出诊断」是两个文件，不要再合并**（已修复的坑）：`诊断日志.txt` 由 `AppendDiagLog` 在运行期持续追加；`导出诊断.txt` 由「导出诊断」按钮每次整文件重写，并**把实时日志全文抄进去**。早期版本让导出直接覆盖写 `诊断日志.txt`，会在用户最需要证据的时刻（出问题时点导出）把整条证据链清空。改动导出逻辑时切勿再把两者合并。相关代码见第 17 章。
 - **原生访问违规闪退无法被托管捕获**：在 CsWinRT interop 中手工取指针可能导致 `0xc0000005`，`try/catch` 抓不到，表现为「点开启翻译直接闪退」。
 - **`ImmediateContext` 非线程安全**：不要为了「不阻塞回调」而把帧处理改成并发执行。
 
@@ -480,7 +491,6 @@ WGC 失败原因：[WGC 步骤N] xxx
 
 | 项 | 说明 |
 |---|---|
-| 导出诊断机制 | `CopyDiag_Click` 覆盖写 `诊断日志.txt`，会抹掉 `AppendDiagLog` 的实时日志。建议：导出时把实时日志内容拼进导出文本，并改写新文件（如 `导出诊断.txt`），不再覆盖实时日志 |
 | 旧 D3D 回读路径的去留 | `UseSoftwareBitmapPath = false` 的自建 D3D 路径已证明会触发 `0x887A0006`，目前仅作回退保留；确认 SoftwareBitmap 路径稳定后可考虑删除，减少维护面 |
 | 30 帧兜底阈值 | 「到达 ≥ 30 且 转图 == 0 → 降级 GDI」在 WGC 真能用时也会误伤（诊断开关被勾着就是典型）。建议改为「连续 N 秒转图无增长」 |
 | 环境层健壮性 | WGC 已通（见 11.6）。若在别的机器上再出现 `DEVICE_HUNG`，先在物理机前本地操作、并尝试禁用虚拟显示适配器后复现（见 11.7） |
@@ -489,19 +499,21 @@ WGC 失败原因：[WGC 步骤N] xxx
 
 ## 17. 代码位置速查表
 
+> 括注的行号会随代码改动而漂移，**定位请以「文件 + 方法名」为准**，行号只作快速跳转参考。
+
 | 想改什么 | 看哪里 |
 |---|---|
 | 开启 / 停止翻译、配置校验、捕获后端选择 | `MainWindow.xaml.cs` `StartTranslation()`（约 L209-369） |
 | 单帧处理链路（捕获 → OCR → 翻译 → 绘制） | `MainWindow.xaml.cs` `ProcessFrame()`（L417） |
 | 状态栏输出（诊断仪表盘） | `MainWindow.xaml.cs` `SetStatus()`（L1109） |
 | 主界面 XAML（含各种诊断复选框、按钮） | `MainWindow.xaml` |
-| 「导出诊断」按钮 | `MainWindow.xaml.cs` `CopyDiag_Click` |
-| WGC 回调（计数 / 节流 / 重入守卫 / 触发转换） | [Services/WgcCaptureService.cs](Services/WgcCaptureService.cs) `OnFrameArrived`（L541） |
+| 「导出诊断」按钮（写独立的 `导出诊断.txt`，并抄入实时日志全文） | `MainWindow.xaml.cs` `CopyDiag_Click`（L1288） |
+| WGC 回调（计数 / 节流 / 重入守卫 / 触发转换） | [Services/WgcCaptureService.cs](Services/WgcCaptureService.cs) `OnFrameArrived`（L583） |
 | WGC 帧池创建（必须 `CreateFreeThreaded`） | [Services/WgcCaptureService.cs](Services/WgcCaptureService.cs) L215 |
 | SoftwareBitmap → SKBitmap 转换 | [Services/WgcCaptureService.cs](Services/WgcCaptureService.cs) `ConvertViaSoftwareBitmapAsync` / `SoftwareBitmapToSkBitmap` |
-| 自建 D3D 回读路径（回退用） | [Services/WgcCaptureService.cs](Services/WgcCaptureService.cs) `ConvertSurfaceToSkBitmap`（L1038） |
-| WGC 资源释放 | [Services/WgcCaptureService.cs](Services/WgcCaptureService.cs) `Dispose`（L1197） |
-| 诊断日志写入 | `WgcCaptureService.cs` `AppendDiagLog` |
+| 自建 D3D 回读路径（回退用） | [Services/WgcCaptureService.cs](Services/WgcCaptureService.cs) `ConvertSurfaceToSkBitmap`（L1080） |
+| WGC 资源释放 | [Services/WgcCaptureService.cs](Services/WgcCaptureService.cs) `Dispose`（L1239） |
+| 诊断日志写入（运行期追加） | `Services/WgcCaptureService.cs` `AppendDiagLog` / `ReadDiagLog` / `DiagLogPath` / `ExportDiagPath` |
 | GDI 抓帧（PrintWindow / BitBlt 回退） | `Services/GdiCaptureService.cs` `Capture()` |
 | OCR 服务与选项 | `Services/OcrService.cs`（约 L23-82 选项、L84-154 初始化、L156-213 `Recognize()`） |
 | OCR 线程数与 provider | `Services/OcrRuntime.cs`（约 L69-108） |

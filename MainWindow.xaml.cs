@@ -1268,14 +1268,22 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 「导出诊断」：把状态栏全文 + 帧错误历史写进诊断日志文件，然后自动打开给用户看。
+    /// 「导出诊断」：把状态栏全文 + 帧错误历史 + **实时诊断日志全文** 写进
+    /// 「导出诊断.txt」，然后自动打开给用户看。
     ///
     /// 状态栏是 TextBlock（WPF 默认不可选中），排查时只能靠截图，很麻烦。
     /// 且剪贴板会被别的进程占用导致「复制失败」，所以改用文件通道：
     /// 日志文件是进程独有，写入必成功，排查时可直接读全文。
     ///
-    /// 【覆盖语义】每次导出都整文件重写，不追加 —— 下一次导出自动替换上一次的内容，
-    /// 不会越积越长。运行期捕获服务仍会即时追加帧错误（不导出也不丢）。
+    /// 【为什么不再写「诊断日志.txt」】该文件是运行期由
+    /// <see cref="WgcCaptureService.AppendDiagLog"/> 持续追加的证据链。
+    /// 导出若覆盖写同一个文件，就会在用户最需要证据的那一刻（出问题时点导出）
+    /// 把整条链清空。现在导出改写独立的「导出诊断.txt」，并**把实时日志全文抄进去**，
+    /// 既保住实时证据，又让导出文件自成一体。
+    ///
+    /// 【覆盖语义】每次导出都整文件重写「导出诊断.txt」，不追加 ——
+    /// 下一次导出自动替换上一次的内容，不会越积越长。
+    /// 「诊断日志.txt」只由捕获服务追加，导出不再触碰它。
     /// </summary>
     private void CopyDiag_Click(object sender, RoutedEventArgs e)
     {
@@ -1290,15 +1298,24 @@ public partial class MainWindow : Window
             foreach (var h in hist) sb.AppendLine(h);
         }
 
-        // 覆盖写入（WriteAllText 自带截断），保证下一次导出替换上一次
+        // 把实时日志全文抄进导出：导出不再覆盖实时日志，证据只能靠这一步带出来
+        var live = WgcCaptureService.ReadDiagLog();
+        if (!string.IsNullOrWhiteSpace(live))
+        {
+            sb.AppendLine();
+            sb.AppendLine($"---- 实时诊断日志全文（{WgcCaptureService.DiagLogFileName}）----");
+            sb.AppendLine(live.TrimEnd());
+        }
+
+        // 写独立文件（WriteAllText 自带截断）；实时日志不受影响
         try
         {
-            System.IO.File.WriteAllText(WgcCaptureService.DiagLogPath, sb.ToString(),
+            System.IO.File.WriteAllText(WgcCaptureService.ExportDiagPath, sb.ToString(),
                 System.Text.Encoding.UTF8);
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"写入诊断日志失败：{ex.Message}", "导出诊断",
+            MessageBox.Show($"写入导出诊断失败：{ex.Message}", "导出诊断",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
@@ -1308,7 +1325,7 @@ public partial class MainWindow : Window
         {
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
             {
-                FileName = WgcCaptureService.DiagLogPath,
+                FileName = WgcCaptureService.ExportDiagPath,
                 UseShellExecute = true
             });
         }

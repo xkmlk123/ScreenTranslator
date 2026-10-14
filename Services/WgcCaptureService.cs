@@ -450,7 +450,7 @@ public class WgcCaptureService : IDisposable
     /// 而日志文件是进程独有，只要写就一定成功，且排查时能直接读全文。
     /// </summary>
     public static string DiagLogPath =>
-        System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "诊断日志.txt");
+        System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, DiagLogFileName);
 
     /// <summary>
     /// 追加一行到诊断日志（永不抛异常——日志本身不能成为新的故障源）。
@@ -469,6 +469,48 @@ public class WgcCaptureService : IDisposable
         catch
         {
             // 记日志失败不应影响主流程，静默忽略。
+        }
+    }
+
+    /// <summary>实时诊断日志的文件名。</summary>
+    public const string DiagLogFileName = "诊断日志.txt";
+
+    /// <summary>
+    /// 导出诊断的文件名。**刻意与实时日志分开**：
+    /// 实时日志是运行期 append-only 的证据链，导出若写同一个文件，
+    /// 就会在用户最需要证据的那一刻把它清空。
+    /// </summary>
+    public const string ExportDiagFileName = "导出诊断.txt";
+
+    /// <summary>导出诊断文件的路径（输出目录下的「导出诊断.txt」）。</summary>
+    public static string ExportDiagPath =>
+        System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ExportDiagFileName);
+
+    /// <summary>
+    /// 读取实时诊断日志全文（永不抛异常，读不到就返回空串）。
+    ///
+    /// 导出写的是独立文件、不再覆盖实时日志，因此必须把实时内容**抄进导出**，
+    /// 否则用户手上只有半份证据。
+    ///
+    /// 共享模式必须是 <see cref="System.IO.FileShare.ReadWrite"/>：日志正被
+    /// <see cref="AppendDiagLog"/> 以追加方式持有，不放开写共享就会读失败。
+    /// </summary>
+    public static string ReadDiagLog()
+    {
+        try
+        {
+            var path = DiagLogPath;
+            if (!System.IO.File.Exists(path)) return "";
+            using var fs = new System.IO.FileStream(
+                path, System.IO.FileMode.Open, System.IO.FileAccess.Read,
+                System.IO.FileShare.ReadWrite);
+            using var sr = new System.IO.StreamReader(
+                fs, System.Text.Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            return sr.ReadToEnd();
+        }
+        catch
+        {
+            return "";
         }
     }
 
