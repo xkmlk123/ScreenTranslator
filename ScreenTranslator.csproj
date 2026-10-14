@@ -32,4 +32,16 @@
           CopyToOutputDirectory="PreserveNewest"
           Link="models\v5\ppocrv5_dict.txt" />
   </ItemGroup>
+
+  <!--
+    项目介绍 / 交接文档随构建一起拷到输出目录，方便拿到程序的人直接查看。
+    同一份 README.md 以两个名字落盘：
+      README.md    —— 与 GitHub 仓库首页一致
+      使用说明.md  —— 中文用户更直观
+  -->
+  <ItemGroup>
+    <None Include="README.md" CopyToOutputDirectory="PreserveNewest" Link="README.md" />
+    <None Include="README.md" CopyToOutputDirectory="PreserveNewest" Link="使用说明.md" />
+    <None Include="LICENSE" CopyToOutputDirectory="PreserveNewest" Link="LICENSE" />
+  </ItemGroup>
 </Project>
