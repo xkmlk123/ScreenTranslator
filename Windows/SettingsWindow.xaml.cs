@@ -79,6 +79,12 @@ public partial class SettingsWindow : Window
         ChangeMinCellsBox.Text = config.ChangeMinCells.ToString(CultureInfo.InvariantCulture);
         OverlayExcludeCaptureCheck.IsChecked = config.OverlayExcludeFromCapture;
 
+        // ---- 诊断与日志 ----
+        // 把本次运行的日志路径直接写出来，用户必要时能手抄/复制去定位；
+        // ToolTip 里给出文件名，说明「打开日志文件夹」会定位到哪一个。
+        if (LogPathText != null) LogPathText.Text = $"路径：{AppLog.LogDir}";
+        if (OpenLogDirBtn != null) OpenLogDirBtn.ToolTip = $"本次运行日志：{AppLog.DiagFileName}";
+
         // 所有控件就绪，解除守卫，再统一刷一次标签/预览
         _initializing = false;
         UpdateStyleLabels();
@@ -289,6 +295,43 @@ public partial class SettingsWindow : Window
     {
         if (_initializing) return;
         UpdateStyleLabels();
+    }
+
+    /// <summary>
+    /// 「打开日志文件夹」：用资源管理器打开 logs/，并定位到**本次运行**的日志文件。
+    ///
+    /// 【为什么开文件夹而不是直接开文件】同一目录下还躺着历次运行的日志与崩溃记录
+    /// （error.log —— 而要看崩溃往往是想查上一次运行）。只开单个文件会把它们挡住；
+    /// 用 /select 定位到本次运行的文件，等于两者兼得。
+    ///
+    /// 【为什么不在这里读出内容显示】日志可能上兆字节，塞进设置窗口既慢又难读，
+    /// 交给系统默认程序打开更合适。
+    /// </summary>
+    private void OpenLogDir_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            string dir = AppLog.LogDir;
+            // 正常情况下 App 启动已建好目录；此处兜底，避免首次运行直接点按钮时开不出窗口
+            System.IO.Directory.CreateDirectory(dir);
+            string file = AppLog.DiagLogPath;
+
+            string args = System.IO.File.Exists(file)
+                ? $"/select,\"{file}\""     // 本次日志已存在 → 打开目录并选中它
+                : $"\"{dir}\"";             // 本次还没写过日志 → 只打开目录
+
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                Arguments = args,
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"打开日志文件夹失败：{ex.Message}", "打开日志",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     /// <summary>把样式项恢复为默认值</summary>

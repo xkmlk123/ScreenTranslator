@@ -268,6 +268,20 @@
 
                 <CheckBox x:Name="DebugBoxCheck" Content="调试：显示 OCR 检测框（青=原始框，品红=绘制框）" Margin="0,0,0,16"/>
 
+                <!--  诊断与日志：运行日志、历次日志、崩溃记录都落在程序目录的 logs/ 下  -->
+                <TextBlock Text="诊断与日志" FontWeight="Bold" FontSize="14" Foreground="#333" Margin="0,0,0,8"/>
+                <Border Background="#F3F6FF" BorderBrush="#B9C7F0" BorderThickness="1"
+                        CornerRadius="4" Padding="10" Margin="0,0,0,16">
+                    <StackPanel>
+                        <Button x:Name="OpenLogDirBtn" Content="打开日志文件夹"
+                                Height="32" Click="OpenLogDir_Click"/>
+                        <TextBlock x:Name="LogPathText" Foreground="Gray" FontSize="11"
+                                   TextWrapping="Wrap" Margin="0,8,0,0"/>
+                        <TextBlock Text="本次运行的日志、历次运行的日志、崩溃记录（error.log）都在这里。日志文件名带本次运行的开始时间，看名字就知道是哪一次。"
+                                   Foreground="Gray" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Border>
+
                 <TextBlock Text="提示：修改后点保存生效；热键改动需要重新开启翻译。"
                            Foreground="Gray" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8"/>
             </StackPanel>
