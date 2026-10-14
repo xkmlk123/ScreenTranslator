@@ -443,6 +443,50 @@ public class WgcCaptureService : IDisposable
     /// </summary>
     public bool UseSoftwareBitmapPath { get; set; } = true;
 
+    // =====================================================================
+    //  诊断日志：滚动保留 + 「本次运行」隔离
+    //
+    //  两条设计约束（都来自实际使用需求）：
+    //    ① 体积上限：日志到量级后**丢弃最旧的**，而不是整文件清空 ——
+    //       清空会把刚发生的、崩溃前那几行一起抹掉，等于白记。
+    //    ② 本次运行隔离：文件跨进程累积，导出时必须能只取「本次运行」那一段，
+    //       否则导出里塞满上次、上上次运行的日志，反而淹没关键信息。
+    // =====================================================================
+
+    /// <summary>实时诊断日志的文件名。</summary>
+    public const string DiagLogFileName = "诊断日志.txt";
+
+    /// <summary>
+    /// 导出诊断的文件名。**刻意与实时日志分开**：
+    /// 实时日志是运行期持续追加的证据链，导出若写同一个文件，
+    /// 就会在用户最需要证据的那一刻把它清空。
+    /// </summary>
+    public const string ExportDiagFileName = "导出诊断.txt";
+
+    /// <summary>日志体积上限（字节）。超过后从头部丢弃最旧内容。</summary>
+    private const long DiagLogMaxBytes = 1024 * 1024;      // 1 MB
+
+    /// <summary>触发裁剪后保留的尾部字节数。留出余量，避免每写一行都裁一次。</summary>
+    private const long DiagLogKeepBytes = 768 * 1024;      // 768 KB
+
+    /// <summary>
+    /// 「本次运行开始」标记行的前缀。导出时据此把日志切成「本次运行」与「历次运行」。
+    /// 前缀 + 时间戳的写法同时方便人肉阅读。
+    /// </summary>
+    public const string RunMarkerPrefix = "==== 本次运行开始";
+
+    /// <summary>本次进程的启动时间，全生命周期只取一次。</summary>
+    private static readonly DateTime ProcessStartTime = DateTime.Now;
+
+    /// <summary>
+    /// 日志读写串行化。裁剪需要「读全文 → 整体重写」，不加锁会与并发的追加互相覆盖
+    /// （捕获回调线程与 UI 线程都会写日志）。
+    /// </summary>
+    private static readonly object DiagLogLock = new();
+
+    /// <summary>「本次运行开始」标记是否已写入本进程（0 = 未写，1 = 已写）。</summary>
+    private static int _runMarkerWritten;
+
     /// <summary>
     /// 诊断日志文件路径（输出目录下的「诊断日志.txt」）。
     ///
@@ -452,19 +496,28 @@ public class WgcCaptureService : IDisposable
     public static string DiagLogPath =>
         System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, DiagLogFileName);
 
+    /// <summary>导出诊断文件的路径（输出目录下的「导出诊断.txt」）。</summary>
+    public static string ExportDiagPath =>
+        System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ExportDiagFileName);
+
     /// <summary>
     /// 追加一行到诊断日志（永不抛异常——日志本身不能成为新的故障源）。
-    /// 文件超过 1MB 自动清空重写，避免长时间运行撑爆磁盘。
+    ///
+    /// 本进程第一次写入时会先落一行「本次运行开始」标记；
+    /// 写入后若超过体积上限，则从头部丢弃最旧内容（见 <see cref="TrimLocked"/>）。
     /// </summary>
     public static void AppendDiagLog(string text)
     {
         try
         {
-            var path = DiagLogPath;
-            var fi = new System.IO.FileInfo(path);
-            if (fi.Exists && fi.Length > 1024 * 1024)
-                System.IO.File.Delete(path);
-            System.IO.File.AppendAllText(path, text + Environment.NewLine, System.Text.Encoding.UTF8);
+            lock (DiagLogLock)
+            {
+                var path = DiagLogPath;
+                EnsureRunMarkerLocked(path);
+                System.IO.File.AppendAllText(path, text + Environment.NewLine,
+                    System.Text.Encoding.UTF8);
+                TrimLocked(path);
+            }
         }
         catch
         {
@@ -472,41 +525,82 @@ public class WgcCaptureService : IDisposable
         }
     }
 
-    /// <summary>实时诊断日志的文件名。</summary>
-    public const string DiagLogFileName = "诊断日志.txt";
+    /// <summary>本进程首次写日志时落一行运行标记（调用方已持锁）。</summary>
+    private static void EnsureRunMarkerLocked(string path)
+    {
+        if (System.Threading.Interlocked.Exchange(ref _runMarkerWritten, 1) == 1) return;
+        System.IO.File.AppendAllText(path,
+            $"{RunMarkerPrefix} {ProcessStartTime:yyyy-MM-dd HH:mm:ss} ====" + Environment.NewLine,
+            System.Text.Encoding.UTF8);
+    }
 
     /// <summary>
-    /// 导出诊断的文件名。**刻意与实时日志分开**：
-    /// 实时日志是运行期 append-only 的证据链，导出若写同一个文件，
-    /// 就会在用户最需要证据的那一刻把它清空。
+    /// 超过上限则丢弃最旧的日志，只保留尾部 <see cref="DiagLogKeepBytes"/> 字节。
+    ///
+    /// 【必须按字节处理】日志几乎全是中文，UTF-8 下一个汉字占 3 字节 ——
+    /// 早期版本用 <c>string.Length</c>（字符数）与阈值比较，文件字节数到 2.2MB 时
+    /// 字符数才约 750K，低于保留阈值，裁剪被整段跳过，日志于是无限增长。
+    ///
+    /// 截断点对齐到 '\n'（不留半行）；若「本次运行开始」标记恰好被裁掉，则补写一行，
+    /// 保证导出仍能定位「本次运行」的起点（调用方已持锁）。
     /// </summary>
-    public const string ExportDiagFileName = "导出诊断.txt";
+    private static void TrimLocked(string path)
+    {
+        var fi = new System.IO.FileInfo(path);
+        if (!fi.Exists || fi.Length <= DiagLogMaxBytes) return;
 
-    /// <summary>导出诊断文件的路径（输出目录下的「导出诊断.txt」）。</summary>
-    public static string ExportDiagPath =>
-        System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ExportDiagFileName);
+        byte[] bytes;
+        try { bytes = System.IO.File.ReadAllBytes(path); }
+        catch { return; }
+        if (bytes.Length <= DiagLogKeepBytes) return;
+
+        int cut = bytes.Length - (int)DiagLogKeepBytes;
+        int nl = System.Array.IndexOf(bytes, (byte)'\n', cut);
+        if (nl < 0) return;
+
+        // 从 '\n' 之后起编码，起点必在字符边界上；非法字节由 UTF-8 解码器替换为 U+FFFD，不会抛
+        var kept = System.Text.Encoding.UTF8.GetString(bytes, nl + 1, bytes.Length - nl - 1);
+
+        var head = new System.Text.StringBuilder();
+        head.AppendLine($"（更早的日志已因超过 {DiagLogMaxBytes / 1024} KB 上限被丢弃）");
+        if (!kept.Contains(RunMarkerPrefix, StringComparison.Ordinal))
+            head.AppendLine(
+                $"{RunMarkerPrefix} {ProcessStartTime:yyyy-MM-dd HH:mm:ss} ====（本次运行更早的内容也已丢弃）====");
+
+        System.IO.File.WriteAllText(path, head.ToString() + kept, System.Text.Encoding.UTF8);
+    }
 
     /// <summary>
-    /// 读取实时诊断日志全文（永不抛异常，读不到就返回空串）。
+    /// 读取实时诊断日志（永不抛异常，读不到或异常一律返回空串）。
     ///
-    /// 导出写的是独立文件、不再覆盖实时日志，因此必须把实时内容**抄进导出**，
-    /// 否则用户手上只有半份证据。
-    ///
-    /// 共享模式必须是 <see cref="System.IO.FileShare.ReadWrite"/>：日志正被
-    /// <see cref="AppendDiagLog"/> 以追加方式持有，不放开写共享就会读失败。
+    /// <paramref name="currentRunOnly"/> = true 时只返回最后一个「本次运行开始」标记
+    /// 之后的内容，即**本次软件运行产生的日志**，不含历次运行的残留。
     /// </summary>
-    public static string ReadDiagLog()
+    public static string ReadDiagLog(bool currentRunOnly = false)
     {
         try
         {
-            var path = DiagLogPath;
-            if (!System.IO.File.Exists(path)) return "";
-            using var fs = new System.IO.FileStream(
-                path, System.IO.FileMode.Open, System.IO.FileAccess.Read,
-                System.IO.FileShare.ReadWrite);
-            using var sr = new System.IO.StreamReader(
-                fs, System.Text.Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-            return sr.ReadToEnd();
+            lock (DiagLogLock)
+            {
+                var path = DiagLogPath;
+                if (!System.IO.File.Exists(path)) return "";
+
+                string all;
+                // 共享模式放开 ReadWrite：用户可能正用记事本打开该文件查看
+                using (var fs = new System.IO.FileStream(
+                    path, System.IO.FileMode.Open, System.IO.FileAccess.Read,
+                    System.IO.FileShare.ReadWrite))
+                using (var sr = new System.IO.StreamReader(
+                    fs, System.Text.Encoding.UTF8, detectEncodingFromByteOrderMarks: true))
+                {
+                    all = sr.ReadToEnd();
+                }
+
+                if (!currentRunOnly) return all;
+
+                int idx = all.LastIndexOf(RunMarkerPrefix, StringComparison.Ordinal);
+                return idx < 0 ? all : all[idx..];
+            }
         }
         catch
         {

@@ -176,10 +176,10 @@ ScreenTranslator/
 |---|---|---|
 | `config.json` | `ConfigService` | 用户配置，**含 API Key，切勿提交** |
 | `error.log` | `App.xaml.cs` 全局异常兜底 | 崩溃堆栈（原生 AV 类闪退抓不到，见第 14 章） |
-| `诊断日志.txt` | `WgcCaptureService.AppendDiagLog` | 运行期**持续追加**的证据链；超过 1MB 自动清空重写 |
-| `导出诊断.txt` | 「导出诊断」按钮 | 每次导出**整文件重写**，内容 = 状态栏 + 帧错误历史 + 实时日志全文 |
+| `诊断日志.txt` | `WgcCaptureService.AppendDiagLog` | 运行期**持续追加**的证据链；**跨进程累积**，用「本次运行开始」标记分段；超过 **1MB 上限**时从头部丢弃最旧内容（保留尾部 768KB），**不是整文件清空** |
+| `导出诊断.txt` | 「导出诊断」按钮 | 每次导出**整文件重写**，内容 = 状态栏 + 帧错误历史 + **本次运行**的日志（不含历次运行残留） |
 
-> 后两者**刻意分开**，原因见第 12 章与第 17 章。
+> 后两者**刻意分开**：导出一旦写实时日志文件，就会在用户最需要证据的那一刻把它清空。原因见第 12 章与第 17 章。
 
 ---
 
@@ -429,7 +429,8 @@ WGC 失败原因：[WGC 步骤N] xxx
 
 - **GDI 降级是安全网，不是主路径**：WGC 已跑通（见 11.6），但在**虚拟显示适配器、远程桌面 / 远程控制**等环境下仍可能触发 `DXGI_ERROR_DEVICE_HUNG`，此时程序自动降级 GDI，功能不受影响。GDI 要求目标窗口可见、未被完全遮挡，且**防截屏可能失效**（会启用临时隐藏覆盖层兜底，代价是抓帧瞬间闪一下）。详见第 11 章。
 - **目标窗口以管理员身份运行**时，本程序也必须以管理员身份运行，否则系统会拒绝捕获。
-- **「诊断日志」与「导出诊断」是两个文件，不要再合并**（已修复的坑）：`诊断日志.txt` 由 `AppendDiagLog` 在运行期持续追加；`导出诊断.txt` 由「导出诊断」按钮每次整文件重写，并**把实时日志全文抄进去**。早期版本让导出直接覆盖写 `诊断日志.txt`，会在用户最需要证据的时刻（出问题时点导出）把整条证据链清空。改动导出逻辑时切勿再把两者合并。相关代码见第 17 章。
+- **「诊断日志」与「导出诊断」是两个文件，不要再合并**（已修复的坑）：`诊断日志.txt` 由 `AppendDiagLog` 在运行期持续追加；`导出诊断.txt` 由「导出诊断」按钮每次整文件重写，并把**本次运行的日志**抄进去。早期版本让导出直接覆盖写 `诊断日志.txt`，会在用户最需要证据的时刻（出问题时点导出）把整条证据链清空。改动导出逻辑时切勿再把两者合并。相关代码见第 17 章。
+- **给日志做体积限制必须按字节比较，不能用 `string.Length`**（已修复的坑）：中文在 UTF-8 下 1 字符 = 3 字节。曾用**字符数**去和**字节阈值**比较，结果文件涨到 2.2MB 时字符数才约 750K，裁剪条件始终不成立，日志无限增长。正确做法是 `ReadAllBytes` + 字节级截断（见 `TrimLocked`）。
 - **原生访问违规闪退无法被托管捕获**：在 CsWinRT interop 中手工取指针可能导致 `0xc0000005`，`try/catch` 抓不到，表现为「点开启翻译直接闪退」。
 - **`ImmediateContext` 非线程安全**：不要为了「不阻塞回调」而把帧处理改成并发执行。
 
@@ -513,7 +514,7 @@ WGC 失败原因：[WGC 步骤N] xxx
 | SoftwareBitmap → SKBitmap 转换 | [Services/WgcCaptureService.cs](Services/WgcCaptureService.cs) `ConvertViaSoftwareBitmapAsync` / `SoftwareBitmapToSkBitmap` |
 | 自建 D3D 回读路径（回退用） | [Services/WgcCaptureService.cs](Services/WgcCaptureService.cs) `ConvertSurfaceToSkBitmap`（L1080） |
 | WGC 资源释放 | [Services/WgcCaptureService.cs](Services/WgcCaptureService.cs) `Dispose`（L1239） |
-| 诊断日志写入（运行期追加） | `Services/WgcCaptureService.cs` `AppendDiagLog` / `ReadDiagLog` / `DiagLogPath` / `ExportDiagPath` |
+| 诊断日志（滚动保留 + 「本次运行」隔离） | `Services/WgcCaptureService.cs` `AppendDiagLog` / `TrimLocked` / `ReadDiagLog(currentRunOnly)` / `RunMarkerPrefix` / `DiagLogPath` / `ExportDiagPath` |
 | GDI 抓帧（PrintWindow / BitBlt 回退） | `Services/GdiCaptureService.cs` `Capture()` |
 | OCR 服务与选项 | `Services/OcrService.cs`（约 L23-82 选项、L84-154 初始化、L156-213 `Recognize()`） |
 | OCR 线程数与 provider | `Services/OcrRuntime.cs`（约 L69-108） |

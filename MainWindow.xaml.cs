@@ -1268,7 +1268,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 「导出诊断」：把状态栏全文 + 帧错误历史 + **实时诊断日志全文** 写进
+    /// 「导出诊断」：把状态栏全文 + 帧错误历史 + **本次运行的诊断日志** 写进
     /// 「导出诊断.txt」，然后自动打开给用户看。
     ///
     /// 状态栏是 TextBlock（WPF 默认不可选中），排查时只能靠截图，很麻烦。
@@ -1278,8 +1278,12 @@ public partial class MainWindow : Window
     /// 【为什么不再写「诊断日志.txt」】该文件是运行期由
     /// <see cref="WgcCaptureService.AppendDiagLog"/> 持续追加的证据链。
     /// 导出若覆盖写同一个文件，就会在用户最需要证据的那一刻（出问题时点导出）
-    /// 把整条链清空。现在导出改写独立的「导出诊断.txt」，并**把实时日志全文抄进去**，
+    /// 把整条链清空。现在导出改写独立的「导出诊断.txt」，并**把日志内容抄进去**，
     /// 既保住实时证据，又让导出文件自成一体。
+    ///
+    /// 【只取本次运行】日志文件跨进程累积，抄全文会把历次运行的残留一起带出来，
+    /// 关键信息反而被淹没。因此传 currentRunOnly: true，只取最后一个
+    /// 「本次运行开始」标记之后的内容。
     ///
     /// 【覆盖语义】每次导出都整文件重写「导出诊断.txt」，不追加 ——
     /// 下一次导出自动替换上一次的内容，不会越积越长。
@@ -1298,12 +1302,13 @@ public partial class MainWindow : Window
             foreach (var h in hist) sb.AppendLine(h);
         }
 
-        // 把实时日志全文抄进导出：导出不再覆盖实时日志，证据只能靠这一步带出来
-        var live = WgcCaptureService.ReadDiagLog();
+        // 只取「本次运行」那一段：日志文件跨进程累积，
+        // 把历次运行的残留一并抄进来只会淹没关键信息
+        var live = WgcCaptureService.ReadDiagLog(currentRunOnly: true);
         if (!string.IsNullOrWhiteSpace(live))
         {
             sb.AppendLine();
-            sb.AppendLine($"---- 实时诊断日志全文（{WgcCaptureService.DiagLogFileName}）----");
+            sb.AppendLine($"---- 本次运行的诊断日志（{WgcCaptureService.DiagLogFileName}）----");
             sb.AppendLine(live.TrimEnd());
         }
 
