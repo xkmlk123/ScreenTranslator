@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.26100.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="RapidOcrNet" Version="4.2.0" />
+    <PackageReference Include="SharpDX.Direct3D11" Version="4.2.0" />
+    <PackageReference Include="SkiaSharp" Version="3.119.1" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Win32" Version="3.119.1" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <!--
+    中文识别模型（PP-OCRv5 ch）随构建一起拷到输出目录。
+    仓库/本地若不存在该文件，程序会在首次启动时提示并自动下载
+    （见 Services/OcrModelManager.cs），这里只是让"已下好的模型"不必每次重下。
+    条件 Copy 保证文件缺失时不会让构建失败。
+  -->
+  <ItemGroup>
+    <None Include="models\v5\ch_PP-OCRv5_rec_mobile.onnx"
+          Condition="Exists('models\v5\ch_PP-OCRv5_rec_mobile.onnx')"
+          CopyToOutputDirectory="PreserveNewest"
+          Link="models\v5\ch_PP-OCRv5_rec_mobile.onnx" />
+    <None Include="models\v5\ppocrv5_dict.txt"
+          Condition="Exists('models\v5\ppocrv5_dict.txt')"
+          CopyToOutputDirectory="PreserveNewest"
+          Link="models\v5\ppocrv5_dict.txt" />
+  </ItemGroup>
+</Project>

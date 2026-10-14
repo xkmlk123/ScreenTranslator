@@ -1,0 +1,279 @@
+<Window x:Class="ScreenTranslator.Windows.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="设置" Height="700" Width="460"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="CanResizeWithGrip">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="0,0,8,0">
+                <TextBlock Text="云端大模型（OpenAI 兼容）" FontWeight="Bold" FontSize="14" Foreground="#333" Margin="0,0,0,8"/>
+
+                <TextBlock Text="API Base Url：" FontWeight="Bold"/>
+                <TextBox x:Name="UrlBox" Margin="0,3,0,10"/>
+
+                <TextBlock Text="API Key：" FontWeight="Bold"/>
+                <TextBox x:Name="KeyBox" Margin="0,3,0,10"/>
+
+                <TextBlock Text="模型名称：" FontWeight="Bold"/>
+                <TextBox x:Name="ModelBox" Margin="0,3,0,16"/>
+
+                <TextBlock Text="本地大模型（Ollama）" FontWeight="Bold" FontSize="14" Foreground="#333" Margin="0,0,0,8"/>
+
+                <TextBlock Text="本地服务地址：" FontWeight="Bold"/>
+                <TextBox x:Name="LocalUrlBox" Margin="0,3,0,10"/>
+
+                <TextBlock Text="本地模型名称：" FontWeight="Bold"/>
+                <TextBox x:Name="LocalModelBox" Margin="0,3,0,10"/>
+
+                <TextBlock Text="本地并发数（1~8，越大越快但更吃显存）：" FontWeight="Bold"/>
+                <TextBox x:Name="ConcurrencyBox" Margin="0,3,0,16"/>
+
+                <TextBlock Text="识别与显示" FontWeight="Bold" FontSize="14" Foreground="#333" Margin="0,0,0,8"/>
+
+                <UniformGrid Rows="1" Columns="2" Margin="0,0,0,10">
+                    <StackPanel>
+                        <TextBlock Text="源语言（本地模式可填）：" FontWeight="Bold"/>
+                        <TextBox x:Name="SourceLangBox" Margin="0,3,0,0" IsReadOnly="True"
+                                 Background="#F0F0F0" Text="自动检测"/>
+                    </StackPanel>
+                    <StackPanel Margin="10,0,0,0">
+                        <TextBlock Text="目标语言：" FontWeight="Bold"/>
+                        <TextBox x:Name="TargetLangBox" Margin="0,3,0,0"/>
+                    </StackPanel>
+                </UniformGrid>
+
+                <TextBlock Text="捕获间隔（毫秒，建议 800~3000）：" FontWeight="Bold"/>
+                <TextBox x:Name="IntervalBox" Margin="0,3,0,10"/>
+
+                <TextBlock Text="最低置信度（0~1，越高越干净但可能漏字）：" FontWeight="Bold"/>
+                <TextBox x:Name="ConfidenceBox" Margin="0,3,0,10"/>
+
+                <!--  变化检测：OCR 前置省流，静止画面不重跑 OCR  -->
+                <Border Background="#F3F6FF" BorderBrush="#B9C7F0" BorderThickness="1"
+                        CornerRadius="4" Padding="10" Margin="0,0,0,10">
+                    <StackPanel>
+                        <CheckBox x:Name="ChangeDetectCheck"
+                                  Content="启用变化检测（画面没变时不重跑 OCR）"
+                                  FontWeight="Bold" Margin="0,0,0,6"/>
+                        <TextBlock Text="最少变化格数（灵敏度，默认 3）：" FontWeight="Bold" Margin="0,0,0,3"/>
+                        <TextBox x:Name="ChangeMinCellsBox" Margin="0,0,0,4"/>
+                        <TextBlock Text="OCR 单帧约 0.6~1.4 秒，静止画面（看文档/看代码）时每帧白跑一遍是最大开销。开启后先比对画面指纹，未变化就整帧跳过 OCR（画面仍按 30 帧跟随窗口移动）。调大=更迟钝更省，调小=更灵敏。"
+                                   Foreground="Gray" FontSize="11" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Border>
+
+                <!--  覆盖层防截屏：堵住「译文被自己抓回去再翻译」的闭环  -->
+                <Border Background="#F3F6FF" BorderBrush="#B9C7F0" BorderThickness="1"
+                        CornerRadius="4" Padding="10" Margin="0,0,0,10">
+                    <StackPanel>
+                        <CheckBox x:Name="OverlayExcludeCaptureCheck"
+                                  Content="覆盖层排除出屏幕捕获（推荐）"
+                                  FontWeight="Bold" Margin="0,0,0,6"/>
+                        <TextBlock Text="开启后覆盖层不出现在任何截图/录屏/远程协助画面中。这很关键：GDI 降级路径用 BitBlt 从【屏幕 DC】抓图，若不排除，译文会被抓回去当成原文再翻译一次，字号逐帧变大。关闭仅供排障（例如要截图记录覆盖层外观）。"
+                                   Foreground="Gray" FontSize="11" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Border>
+
+                <TextBlock Text="OCR 放大倍数（1~3，小字调大）：" FontWeight="Bold"/>
+                <TextBox x:Name="OcrScaleBox" Margin="0,3,0,10"/>
+
+                <!--  推理线程数：实测对性能影响极大，且不是越大越快  -->
+                <TextBlock Text="OCR 推理线程数（0 = 自动，推荐）：" FontWeight="Bold"/>
+                <TextBox x:Name="OcrThreadsBox" Margin="0,3,0,10"/>
+                <TextBlock Text="实测线程数不是越多越快：用满所有核反而可能慢数倍（线程同步开销）。自动值约等于物理核数（钳制 4~8），通常已是最优。仅在确认当前配置慢时才手动调。改后需重新开始翻译生效。"
+                           Foreground="Gray" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,16"/>
+
+                <!--  识别框大小：唯一的框尺寸入口，往左收紧、往右放松  -->
+                <TextBlock Text="识别框大小" FontWeight="Bold" Margin="0,0,0,2"/>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="56"/>
+                    </Grid.ColumnDefinitions>
+                    <Slider x:Name="BoxSizeSlider" Grid.Column="0"
+                            Minimum="0.5" Maximum="1.5" Value="1.0"
+                            TickFrequency="0.05" IsSnapToTickEnabled="True"
+                            ValueChanged="BoxSizeSlider_Changed"/>
+                    <TextBlock x:Name="BoxSizeLabel" Grid.Column="1"
+                               Text="100%" VerticalAlignment="Center"
+                               TextAlignment="Right" FontWeight="Bold" Foreground="#4CAF50"/>
+                </Grid>
+                <Grid Margin="0,0,0,16">
+                    <TextBlock Text="更小 ← 框更贴合文字" Foreground="Gray" FontSize="10"/>
+                    <TextBlock Text="100% = 默认  → 更大（更放松）" Foreground="Gray" FontSize="10"
+                               HorizontalAlignment="Right"/>
+                </Grid>
+                <TextBlock Text="拖动即可调整识别框的大小。100% 为默认；往左框更贴合文字（按每个框的字号自动伸缩，大字收得多、小字收得少），往右则更放松。只影响框的显示，不影响识别结果。"
+                           Foreground="Gray" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,16"/>
+
+                <!--  识别模型状态：中文模型缺失时界面中文完全识别不到，这里给明确提示与修复入口  -->
+                <Border x:Name="ModelStatusBorder" Background="#FFF8E1" BorderBrush="#FFD54F"
+                        BorderThickness="1" CornerRadius="4" Padding="10" Margin="0,0,0,16">
+                    <StackPanel>
+                        <TextBlock x:Name="ModelStatusText" Text="识别模型：检测中…" TextWrapping="Wrap"/>
+                        <Button x:Name="DownloadModelBtn" Content="下载中文识别模型（约 16MB）"
+                                Margin="0,8,0,0" Padding="10,5" HorizontalAlignment="Left"
+                                Click="DownloadModel_Click" Visibility="Collapsed"/>
+                    </StackPanel>
+                </Border>
+
+                <TextBlock Text="译文微调与样式" FontWeight="Bold" FontSize="14" Foreground="#333" Margin="0,0,0,8"/>
+
+                <!--  字号与背景（可视化滑块）  -->
+                <Border Background="#F8F8F8" CornerRadius="4" Padding="10" Margin="0,0,0,12">
+                    <StackPanel>
+                        <!--  实时预览：拖动下方滑块立即看到效果  -->
+                        <TextBlock Text="实时预览" FontWeight="Bold" Margin="0,0,0,4"/>
+                        <Border Background="#FFFFFF" BorderBrush="#DDDDDD" BorderThickness="1"
+                                Height="76" Margin="0,0,0,10" ClipToBounds="True">
+                            <Grid x:Name="PreviewHost" Loaded="PreviewHost_Loaded">
+                                <Canvas x:Name="PreviewCanvas"
+                                        Width="0" Height="0"
+                                        HorizontalAlignment="Left" VerticalAlignment="Top"
+                                        Background="Transparent"/>
+                            </Grid>
+                        </Border>
+
+                        <TextBlock Text="字号大小" FontWeight="Bold" Margin="0,0,0,2"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="52"/>
+                            </Grid.ColumnDefinitions>
+                            <Slider x:Name="FontScaleSlider" Grid.Column="0"
+                                    Minimum="0.5" Maximum="3.0" Value="1.0"
+                                    TickFrequency="0.1" IsSnapToTickEnabled="True"
+                                    ValueChanged="FontScaleSlider_Changed"/>
+                            <TextBlock x:Name="FontScaleLabel" Grid.Column="1"
+                                       Text="1.00x" VerticalAlignment="Center"
+                                       TextAlignment="Right" FontWeight="Bold" Foreground="#4CAF50"/>
+                        </Grid>
+                        <TextBlock Text="译文文字相对自动字号的倍率（看不太清就调大）"
+                                   Foreground="Gray" FontSize="11" TextWrapping="Wrap"/>
+
+                        <TextBlock Text="背景大小" FontWeight="Bold" Margin="0,10,0,2"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="52"/>
+                            </Grid.ColumnDefinitions>
+                            <Slider x:Name="BgScaleSlider" Grid.Column="0"
+                                    Minimum="0.5" Maximum="3.0" Value="1.0"
+                                    TickFrequency="0.1" IsSnapToTickEnabled="True"
+                                    ValueChanged="BgScaleSlider_Changed"/>
+                            <TextBlock x:Name="BgScaleLabel" Grid.Column="1"
+                                       Text="1.00x" VerticalAlignment="Center"
+                                       TextAlignment="Right" FontWeight="Bold" Foreground="#4CAF50"/>
+                        </Grid>
+                        <TextBlock Text="白色底衬相对文字实际尺寸的倍率（1.0 刚好包住文字）"
+                                   Foreground="Gray" FontSize="11" TextWrapping="Wrap"/>
+
+                        <TextBlock Text="背景内边距（像素）" FontWeight="Bold" Margin="0,10,0,2"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="52"/>
+                            </Grid.ColumnDefinitions>
+                            <Slider x:Name="BgPadSlider" Grid.Column="0"
+                                    Minimum="0" Maximum="20" Value="3"
+                                    TickFrequency="1" IsSnapToTickEnabled="True"
+                                    ValueChanged="BgPadSlider_Changed"/>
+                            <TextBlock x:Name="BgPadLabel" Grid.Column="1"
+                                       Text="3 px" VerticalAlignment="Center"
+                                       TextAlignment="Right" FontWeight="Bold" Foreground="#4CAF50"/>
+                        </Grid>
+                        <TextBlock Text="白底在文字四周额外多出的留白（盖原文更干净）"
+                                   Foreground="Gray" FontSize="11" TextWrapping="Wrap"/>
+
+                        <TextBlock Text="背景圆角" FontWeight="Bold" Margin="0,10,0,2"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="52"/>
+                            </Grid.ColumnDefinitions>
+                            <Slider x:Name="BgRadiusSlider" Grid.Column="0"
+                                    Minimum="0" Maximum="16" Value="3"
+                                    TickFrequency="1" IsSnapToTickEnabled="True"
+                                    ValueChanged="BgRadiusSlider_Changed"/>
+                            <TextBlock x:Name="BgRadiusLabel" Grid.Column="1"
+                                       Text="3 px" VerticalAlignment="Center"
+                                       TextAlignment="Right" FontWeight="Bold" Foreground="#4CAF50"/>
+                        </Grid>
+
+                        <TextBlock Text="背景不透明度" FontWeight="Bold" Margin="0,10,0,2"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="52"/>
+                            </Grid.ColumnDefinitions>
+                            <Slider x:Name="BgOpacitySlider" Grid.Column="0"
+                                    Minimum="0" Maximum="1" Value="0.67"
+                                    TickFrequency="0.05" IsSnapToTickEnabled="True"
+                                    ValueChanged="BgOpacitySlider_Changed"/>
+                            <TextBlock x:Name="BgOpacityLabel" Grid.Column="1"
+                                       Text="0.67" VerticalAlignment="Center"
+                                       TextAlignment="Right" FontWeight="Bold" Foreground="#4CAF50"/>
+                        </Grid>
+                        <TextBlock Text="拖到 0 则不画白底，只显示文字"
+                                   Foreground="Gray" FontSize="11" TextWrapping="Wrap"/>
+
+                        <Button Content="恢复默认" Click="ResetStyle_Click"
+                                Height="28" Margin="0,10,0,0" HorizontalAlignment="Left" Width="90"/>
+                    </StackPanel>
+                </Border>
+
+                <TextBlock Text="位置微调" FontWeight="Bold" FontSize="14" Foreground="#333" Margin="0,4,0,8"/>
+
+                <UniformGrid Rows="1" Columns="2" Margin="0,0,0,10">
+                    <StackPanel>
+                        <TextBlock Text="X 偏移（像素）：" FontWeight="Bold"/>
+                        <TextBox x:Name="OffsetXBox" Margin="0,3,0,0"/>
+                    </StackPanel>
+                    <StackPanel Margin="10,0,0,0">
+                        <TextBlock Text="Y 偏移（像素）：" FontWeight="Bold"/>
+                        <TextBox x:Name="OffsetYBox" Margin="0,3,0,0"/>
+                    </StackPanel>
+                </UniformGrid>
+
+                <TextBlock Text="译文不透明度（0.2~1.0）：" FontWeight="Bold"/>
+                <TextBox x:Name="OpacityBox" Margin="0,3,0,10"/>
+
+                <TextBlock Text="全局热键（如 Alt+T / Ctrl+Shift+S）：" FontWeight="Bold"/>
+                <TextBox x:Name="HotkeyBox" Margin="0,3,0,10"/>
+
+                <CheckBox x:Name="CacheCheck" Content="启用译文缓存（相同原文不重复调用 API）" Margin="0,4,0,6"/>
+                <CheckBox x:Name="HideOriginalCheck" Content="隐藏原文，只显示译文" Margin="0,0,0,6"/>
+
+                <!--  仅显示识别框：跳过翻译，只画 OCR 框，用于单独校验识别效果  -->
+                <Border Background="#F3F6FF" BorderBrush="#B9C7F0" BorderThickness="1"
+                        CornerRadius="4" Padding="10" Margin="0,0,0,10">
+                    <StackPanel>
+                        <CheckBox x:Name="OcrBoxesOnlyCheck"
+                                  Content="仅显示 OCR 识别框（不翻译、不显示译文）"
+                                  FontWeight="Bold" Margin="0,0,0,6"/>
+                        <CheckBox x:Name="OcrBoxesTextCheck"
+                                  Content="在框旁标注识别到的原文" Margin="0,0,0,4"/>
+                        <CheckBox x:Name="OcrBoxesScoreCheck"
+                                  Content="在框旁标注置信度" Margin="0,0,0,4"/>
+                        <TextBlock Text="开启后只画识别框：青色=正常识别，橙色=置信度偏低。用于调 OCR 时排除翻译层干扰。"
+                                   Foreground="Gray" FontSize="11" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Border>
+
+                <CheckBox x:Name="DebugBoxCheck" Content="调试：显示 OCR 检测框（青=原始框，品红=绘制框）" Margin="0,0,0,16"/>
+
+                <TextBlock Text="提示：修改后点保存生效；热键改动需要重新开启翻译。"
+                           Foreground="Gray" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8"/>
+            </StackPanel>
+        </ScrollViewer>
+
+        <Button Grid.Row="1" Content="保存" Click="Save_Click" Height="40" Margin="0,16,0,0"
+                Background="#4CAF50" Foreground="White" FontSize="14"/>
+    </Grid>
+</Window>

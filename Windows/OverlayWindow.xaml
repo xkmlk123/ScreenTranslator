@@ -1,0 +1,25 @@
+<Window x:Class="ScreenTranslator.Windows.OverlayWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        Width="1920" Height="1080"
+        WindowStartupLocation="Manual" Left="0" Top="0">
+    <!--
+        两层结构：
+          · RoiLayer     —— 常驻层，只放「识别区域」绿色细线指示框；
+                            内容刷新（Draw/DrawOcrBoxes/ClearOverlay）时不清它，
+                            避免目标窗口一时无文字时绿框闪没。
+          · 其余子元素   —— 内容层（译文/原文/OCR 框），每次内容更新时整体重建。
+        内容层与 RoiLayer 同级、RoiLayer 在前 → 绿框永远在最上层（不遮挡文字，
+        因为 Fill=Transparent，只描边）。
+    -->
+    <Canvas x:Name="OverlayCanvas" Background="Transparent">
+        <Canvas x:Name="RoiLayer"
+                Width="{Binding ActualWidth, ElementName=OverlayCanvas}"
+                Height="{Binding ActualHeight, ElementName=OverlayCanvas}"/>
+    </Canvas>
+</Window>
