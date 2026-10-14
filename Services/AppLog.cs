@@ -31,8 +31,11 @@ namespace ScreenTranslator.Services;
 /// </para>
 ///
 /// <para>
-/// 【导出不覆盖】导出写到独立的 <c>logs/导出诊断_&lt;导出时刻&gt;.txt</c>，
-/// 每次导出新建一个文件，历史全部保留，任何既有文件都不会被改写或重置。
+/// 【导出不覆盖既有内容，但只留最新一份】导出写到独立的
+/// <c>logs/导出诊断_&lt;导出时刻&gt;.txt</c>：<strong>每次导出都新建文件</strong>，
+/// 绝不改写或重置任何既有文件的内容；写完后再删掉上一次的导出文件
+/// （<see cref="DeletePreviousExports"/>），因此导出目录里始终只有最新那一份。
+/// 运行时日志是证据链，跨运行保留，不受此影响。
 /// </para>
 /// </summary>
 public static class AppLog
@@ -73,7 +76,13 @@ public static class AppLog
     /// <summary>全局异常日志裁剪后保留的尾部字节数。</summary>
     private const long ErrorKeepBytes = 384 * 1024;     // 384 KB
 
-    /// <summary><c>logs/</c> 下每类文件保留的最大个数，超出的按修改时间删除最旧的。</summary>
+    /// <summary>
+    /// <c>logs/</c> 下每类文件保留的最大个数，超出的按修改时间删除最旧的。
+    ///
+    /// <para>只对<b>运行时日志</b>有实际意义（一次运行一个文件，需要留几份历史）。
+    /// 导出文件在导出时就被 <see cref="DeletePreviousExports"/> 收敛到只剩最新一份，
+    /// 这里对导出仅作为兜底（正常情况下永远不会触发）。</para>
+    /// </summary>
     private const int KeepRecentFiles = 20;
 
     // =====================================================================
@@ -193,8 +202,9 @@ public static class AppLog
     ///
     /// <para>
     /// <strong>只清理本程序自己生成的文件</strong>：限定在 <c>logs/</c> 目录内、
-    /// 文件名以固定前缀开头、扩展名为 <c>.txt</c>，并且创建 FileInfo 后再用
-    /// <c>StartsWith</c> 二次确认。任何不匹配的文件一律不碰。
+    /// 文件名形如<strong>固定前缀 + <c>yyyyMMdd_HHmmss</c>（可选 <c>-N</c>）+ <c>.txt</c></strong>。
+    /// 仅靠前缀不足以判断归属 —— 用户手工建的 <c>诊断日志_重要.txt</c> 前缀一模一样，
+    /// 见了前缀就删会误伤。任何不匹配的文件一律不碰。
     /// </para>
     /// </summary>
     public static void RetainRecentFiles()
@@ -213,7 +223,7 @@ public static class AppLog
 
             var ordered = files
                 .Select(f => new FileInfo(f))
-                .Where(fi => fi.Name.StartsWith(prefix, StringComparison.Ordinal))
+                .Where(fi => IsGeneratedLogName(fi.Name, prefix))
                 .OrderByDescending(fi => fi.LastWriteTimeUtc)
                 .ToList();
 
@@ -225,6 +235,41 @@ public static class AppLog
             }
         }
         catch { }
+    }
+
+    /// <summary>
+    /// 文件名是否为本程序生成的日志：<c>prefix + yyyyMMdd_HHmmss</c>（可选 <c>-N</c>）+ <c>.txt</c>。
+    ///
+    /// <para>
+    /// 这是「能不能删」的唯一判据，因此刻意写得保守：形状只要有一点不符就判为「不是我们的」。
+    /// 宁可漏删，不可误删。
+    /// </para>
+    /// </summary>
+    private static bool IsGeneratedLogName(string fileName, string prefix)
+    {
+        if (!fileName.StartsWith(prefix, StringComparison.Ordinal)) return false;
+        if (!fileName.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)) return false;
+
+        // 取掉前缀与 ".txt"：应为 20261014_160000 或 20261014_160000-2
+        string core = fileName[prefix.Length..^4];
+        int dash = core.IndexOf('-');
+        if (dash >= 0)
+        {
+            string suffix = core[(dash + 1)..];
+            if (suffix.Length == 0) return false;
+            foreach (char c in suffix)
+                if (c < '0' || c > '9') return false;
+            core = core[..dash];
+        }
+
+        if (core.Length != 15 || core[8] != '_') return false;
+        for (int i = 0; i < core.Length; i++)
+        {
+            if (i == 8) continue;
+            char c = core[i];
+            if (c < '0' || c > '9') return false;
+        }
+        return true;
     }
 
     /// <summary>本进程正在使用的日志文件，任何情况下都不参与清理。</summary>
@@ -328,7 +373,8 @@ public static class AppLog
     /// 为本次导出生成一个<strong>尚不存在</strong>的文件路径：
     /// <c>logs/导出诊断_20261014_155312.txt</c>。同一秒内重复导出会顺延为 <c>-2</c>、<c>-3</c>…
     ///
-    /// <para>关键点：导出永远是<strong>新建文件</strong>，绝不改写或重置任何既有文件。</para>
+    /// <para>关键点：导出永远是<strong>新建文件</strong>，绝不改写或重置任何既有文件；
+    /// 写完后由 <see cref="DeletePreviousExports"/> 删掉上一次的导出，只留最新一份。</para>
     /// </summary>
     public static string NewExportPath()
     {
@@ -336,6 +382,55 @@ public static class AppLog
         try { Directory.CreateDirectory(LogDir); } catch { }
         return Path.Combine(LogDir,
             BuildUniqueName(ExportFilePrefix, now, _exportStampFormat));
+    }
+
+    /// <summary>
+    /// 删除 <c>logs/</c> 下**除本次导出之外**的全部导出诊断文件，使导出始终只保留最新一份。
+    ///
+    /// <para>
+    /// 导出文件的定位是「当前状态的一份快照」，新的一次导出即取代上一次；
+    /// 攒下多份历史导出只会让人分不清哪份是新的。运行时日志
+    /// （<c>诊断日志_*.txt</c>）<strong>不受影响</strong> —— 那是要跨运行保留的证据链。
+    /// </para>
+    ///
+    /// <para>
+    /// 必须传 <paramref name="keepPath"/>（调用方先落好新文件再调用）：
+    /// 保证任何时刻磁盘上至少有一份导出，不会出现「旧的删了、新的没写成」的空窗。
+    /// </para>
+    ///
+    /// <para>
+    /// 只匹配本程序自己生成的文件：文件名必须是 <c>前缀 + yyyyMMdd_HHmmss</c>
+    /// （可选 <c>-N</c> 顺延号）+ <c>.txt</c>。**光有前缀不够** ——
+    /// 用户自己建的 <c>导出诊断_备份.txt</c>、<c>诊断日志_重要.txt</c> 同样是这个前缀，
+    /// 绝不能因为前缀像就被删掉。其他文件一律不碰。
+    /// </para>
+    ///
+    /// <para>
+    /// 上一份导出若正被记事本打开（持有写锁），删除会失败 —— 此时静默保留，下次导出再删。
+    /// 清理永远不能反过来把导出流程搞失败。
+    /// </para>
+    /// </summary>
+    /// <returns>实际删除的文件数（供调用方展示/测试用）。</returns>
+    public static int DeletePreviousExports(string keepPath)
+    {
+        int deleted = 0;
+        try
+        {
+            if (!Directory.Exists(LogDir)) return 0;
+            string keepFull = Path.GetFullPath(keepPath);
+
+            foreach (var f in Directory.GetFiles(
+                         LogDir, ExportFilePrefix + "*.txt", SearchOption.TopDirectoryOnly))
+            {
+                var fi = new FileInfo(f);
+                if (!IsGeneratedLogName(fi.Name, ExportFilePrefix)) continue;
+                if (string.Equals(fi.FullName, keepFull, StringComparison.OrdinalIgnoreCase)) continue;
+
+                try { fi.Delete(); deleted++; } catch { }
+            }
+        }
+        catch { }
+        return deleted;
     }
 
     // =====================================================================
