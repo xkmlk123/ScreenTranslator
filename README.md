@@ -61,7 +61,7 @@
 - **位置微调**：译文 X / Y 方向像素级偏移
 - **全局热键**：默认 `Alt+T` 一键开关翻译
 - **调试工具**：仅显示识别框 / 只显示原文 / 显示 OCR 检测框 / 强制 GDI 捕获 / **WGC 仅计数不取像素（二分诊断）** / 一键导出诊断串
-- **全局异常兜底**：崩溃信息写入同目录 `error.log`，不再「窗口一闪就没了」
+- **全局异常兜底**：崩溃信息写入 `logs/error.log`，不再「窗口一闪就没了」
 
 ---
 
@@ -138,7 +138,7 @@ dotnet run   -c Release
 
 ```
 ScreenTranslator/
-├── App.xaml(.cs)             程序入口 + 全局异常兜底（崩溃写 error.log）
+├── App.xaml(.cs)             程序入口 + 全局异常兜底（崩溃写 logs/error.log）
 ├── MainWindow.xaml(.cs)      主窗口：模式选择、窗口选择、开关、状态栏、单帧调度
 ├── app.manifest              清单：requireAdministrator、Per-Monitor V2 DPI
 ├── ScreenTranslator.csproj   项目与 NuGet 依赖声明
@@ -149,6 +149,7 @@ ScreenTranslator/
 │   ├── WindowInfo.cs         可捕获窗口信息（句柄 + 标题）
 │   └── v5/                   OCR 模型目录（首次启动自动下载，不入库）
 ├── Services/
+│   ├── AppLog.cs             日志：目录 / 按运行会话命名 / 体积滚动 / 导出 / 保留策略
 │   ├── WgcCaptureService.cs  WGC 捕获（SoftwareBitmap 路径 + 自建 D3D 路径 + 诊断计数）
 │   ├── GdiCaptureService.cs  GDI 降级捕获（PrintWindow，失败回退 BitBlt + 临时隐藏覆盖层）
 │   ├── OcrService.cs         OCR 推理封装（中文模型、上采样、置信度过滤、结果合并）
@@ -170,16 +171,18 @@ ScreenTranslator/
     └── RegionSelectWindow.xaml(.cs) 识别区域框选（Esc 取消）
 ```
 
-程序所在目录（即输出目录）在运行期会额外产生下列文件，**全部已列入 `.gitignore`**：
+运行期产生的文件**全部已列入 `.gitignore`**。日志统一落在程序目录下的 `logs/`：
 
 | 文件 | 生成者 | 说明 |
 |---|---|---|
+| `logs/诊断日志_<启动时刻>.txt` | `AppLog.Info` | 运行时日志。**文件名 = 本次进程启动时刻**（如 `诊断日志_20261014_152103.txt`），**一次运行一个文件**；超过 **1MB** 时从头部丢弃最旧内容（保留尾部 768KB），**不是整文件清空** |
+| `logs/导出诊断_<导出时刻>.txt` | 「导出诊断」按钮 | **每次导出新建一个文件**，文件名 = 导出时刻，**永不覆盖或重置任何既有文件**。内容 = 环境头 + 状态栏快照 + 帧错误历史 + 本次运行日志全文 |
+| `logs/error.log` | `App.xaml.cs` 全局异常兜底 | 崩溃堆栈（原生 AV 类闪退抓不到，见第 14 章）；超过 512KB 同样丢弃最旧内容 |
+| `logs/debug_frame.png` | 诊断路径 | 首帧调试截图，只在需要时落盘一次 |
 | `config.json` | `ConfigService` | 用户配置，**含 API Key，切勿提交** |
-| `error.log` | `App.xaml.cs` 全局异常兜底 | 崩溃堆栈（原生 AV 类闪退抓不到，见第 14 章） |
-| `诊断日志.txt` | `WgcCaptureService.AppendDiagLog` | 运行期**持续追加**的证据链；**跨进程累积**，用「本次运行开始」标记分段；超过 **1MB 上限**时从头部丢弃最旧内容（保留尾部 768KB），**不是整文件清空** |
-| `导出诊断.txt` | 「导出诊断」按钮 | 每次导出**整文件重写**，内容 = 状态栏 + 帧错误历史 + **本次运行**的日志（不含历次运行残留） |
 
-> 后两者**刻意分开**：导出一旦写实时日志文件，就会在用户最需要证据的那一刻把它清空。原因见第 12 章与第 17 章。
+> `logs/` 下每类日志各保留**最新的 20 个文件**，更旧的按修改时间自动删除；删除只匹配本程序自己的固定前缀（`诊断日志_*.txt` / `导出诊断_*.txt`），不碰其他文件。
+> 「按时间命名」和「导出不覆盖」是硬约束，原因见第 12 章；相关代码见第 17 章。
 
 ---
 
@@ -429,8 +432,11 @@ WGC 失败原因：[WGC 步骤N] xxx
 
 - **GDI 降级是安全网，不是主路径**：WGC 已跑通（见 11.6），但在**虚拟显示适配器、远程桌面 / 远程控制**等环境下仍可能触发 `DXGI_ERROR_DEVICE_HUNG`，此时程序自动降级 GDI，功能不受影响。GDI 要求目标窗口可见、未被完全遮挡，且**防截屏可能失效**（会启用临时隐藏覆盖层兜底，代价是抓帧瞬间闪一下）。详见第 11 章。
 - **目标窗口以管理员身份运行**时，本程序也必须以管理员身份运行，否则系统会拒绝捕获。
-- **「诊断日志」与「导出诊断」是两个文件，不要再合并**（已修复的坑）：`诊断日志.txt` 由 `AppendDiagLog` 在运行期持续追加；`导出诊断.txt` 由「导出诊断」按钮每次整文件重写，并把**本次运行的日志**抄进去。早期版本让导出直接覆盖写 `诊断日志.txt`，会在用户最需要证据的时刻（出问题时点导出）把整条证据链清空。改动导出逻辑时切勿再把两者合并。相关代码见第 17 章。
-- **给日志做体积限制必须按字节比较，不能用 `string.Length`**（已修复的坑）：中文在 UTF-8 下 1 字符 = 3 字节。曾用**字符数**去和**字节阈值**比较，结果文件涨到 2.2MB 时字符数才约 750K，裁剪条件始终不成立，日志无限增长。正确做法是 `ReadAllBytes` + 字节级截断（见 `TrimLocked`）。
+- **日志一律「按时间命名」，导出一律「新建文件」**（设计约定，勿改回固定文件名）：运行时日志以**本次进程启动时刻**命名（`logs/诊断日志_YYYYMMDD_HHMMSS.txt`，一次运行一个文件），导出以**导出时刻**命名（`logs/导出诊断_YYYYMMDD_HHMMSS.txt`，每次新建）。由此得到三条硬约束：
+  1. **导出绝不覆盖或重置任何既有文件**。早期版本固定写 `导出诊断.txt`，第二次导出就覆盖第一次；更早还一度让导出直接覆盖写运行日志文件，会在用户最需要证据的那一刻（出问题时点导出）把整条证据链清空。
+  2. 因为日志文件**本身就是一次运行**，不再需要「本次运行开始」标记去切分 —— 该标记是「单文件跨进程累积」时期的产物，改为按运行命名后它就成了多余机制。
+  3. 保留策略删除文件时**只匹配本程序自己的固定前缀**，不得扩大成通配。日志目录里的内容不是我们可以随便删的。
+- **给日志做体积限制必须按字节比较，不能用 `string.Length`**（已修复的坑）：中文在 UTF-8 下 1 字符 = 3 字节。曾用**字符数**去和**字节阈值**比较，结果文件涨到 2.2MB 时字符数才约 750K，裁剪条件始终不成立，日志无限增长。正确做法是 `ReadAllBytes` + 字节级截断（见 `AppLog.TrimLocked`）。另：截断点必须跳过以空格开头的**续行**，否则两行式条目（`帧错误：…` 加 `    到达=…`）会被截成只剩续行的孤儿行。
 - **原生访问违规闪退无法被托管捕获**：在 CsWinRT interop 中手工取指针可能导致 `0xc0000005`，`try/catch` 抓不到，表现为「点开启翻译直接闪退」。
 - **`ImmediateContext` 非线程安全**：不要为了「不阻塞回调」而把帧处理改成并发执行。
 
@@ -495,6 +501,9 @@ WGC 失败原因：[WGC 步骤N] xxx
 | 旧 D3D 回读路径的去留 | `UseSoftwareBitmapPath = false` 的自建 D3D 路径已证明会触发 `0x887A0006`，目前仅作回退保留；确认 SoftwareBitmap 路径稳定后可考虑删除，减少维护面 |
 | 30 帧兜底阈值 | 「到达 ≥ 30 且 转图 == 0 → 降级 GDI」在 WGC 真能用时也会误伤（诊断开关被勾着就是典型）。建议改为「连续 N 秒转图无增长」 |
 | 环境层健壮性 | WGC 已通（见 11.6）。若在别的机器上再出现 `DEVICE_HUNG`，先在物理机前本地操作、并尝试禁用虚拟显示适配器后复现（见 11.7） |
+| 日志落盘仍在调用线程上同步执行 | `AppLog.Info` 目前是「调用方线程直接 `lock` → open/write/close → 超限时读 1MB 重写 768KB」。生产者已经被节流（`_lastLoggedError` 等值去重、`_sbDiagCount <= 3`），稳态下几乎不写日志，所以尚未成为问题；但若出现**两种不同错误交替**（等值去重失效）→ 可达 60 行/秒 → 约 170 秒撞上 1MB → 此后每约 42 秒在**帧回调线程**上同步读写约 1.8MB。这与第 9 章「不让 GPU 工作阻塞回调」的原则不一致。建议改为生产者只入队、单个后台线程批量落盘（届时 `AppLog.Gate` 可去掉） |
+| 日志无级别 | 目前所有日志无条件写入，`log = seq <= 3` 这类魔法常量散在调用点，本质是硬编码的级别。建议收敛成统一的 Verbose/Info/Error 三档 |
+| GDI 路径不写日志 | `GdiCaptureService` 对 `AppLog` 的调用数为 0，`PrintWindowOkCount` / `BitBltFallbackCount` 只经状态栏 → 导出。GDI 是第 12 章明确的「安全网」，这条路径目前没有独立可观测性 |
 
 ---
 
@@ -506,15 +515,15 @@ WGC 失败原因：[WGC 步骤N] xxx
 |---|---|
 | 开启 / 停止翻译、配置校验、捕获后端选择 | `MainWindow.xaml.cs` `StartTranslation()`（约 L209-369） |
 | 单帧处理链路（捕获 → OCR → 翻译 → 绘制） | `MainWindow.xaml.cs` `ProcessFrame()`（L417） |
-| 状态栏输出（诊断仪表盘） | `MainWindow.xaml.cs` `SetStatus()`（L1109） |
+| 状态栏输出（诊断仪表盘） | `MainWindow.xaml.cs` `SetStatus()`（L1108） |
 | 主界面 XAML（含各种诊断复选框、按钮） | `MainWindow.xaml` |
-| 「导出诊断」按钮（写独立的 `导出诊断.txt`，并抄入实时日志全文） | `MainWindow.xaml.cs` `CopyDiag_Click`（L1288） |
-| WGC 回调（计数 / 节流 / 重入守卫 / 触发转换） | [Services/WgcCaptureService.cs](Services/WgcCaptureService.cs) `OnFrameArrived`（L583） |
+| 「导出诊断」按钮（每次**新建**文件 + 环境头） | `MainWindow.xaml.cs` `CopyDiag_Click` / `BuildCaptureBackendLine` |
+| WGC 回调（计数 / 节流 / 重入守卫 / 触发转换） | [Services/WgcCaptureService.cs](Services/WgcCaptureService.cs) `OnFrameArrived`（L509） |
 | WGC 帧池创建（必须 `CreateFreeThreaded`） | [Services/WgcCaptureService.cs](Services/WgcCaptureService.cs) L215 |
 | SoftwareBitmap → SKBitmap 转换 | [Services/WgcCaptureService.cs](Services/WgcCaptureService.cs) `ConvertViaSoftwareBitmapAsync` / `SoftwareBitmapToSkBitmap` |
-| 自建 D3D 回读路径（回退用） | [Services/WgcCaptureService.cs](Services/WgcCaptureService.cs) `ConvertSurfaceToSkBitmap`（L1080） |
-| WGC 资源释放 | [Services/WgcCaptureService.cs](Services/WgcCaptureService.cs) `Dispose`（L1239） |
-| 诊断日志（滚动保留 + 「本次运行」隔离） | `Services/WgcCaptureService.cs` `AppendDiagLog` / `TrimLocked` / `ReadDiagLog(currentRunOnly)` / `RunMarkerPrefix` / `DiagLogPath` / `ExportDiagPath` |
+| 自建 D3D 回读路径（回退用） | [Services/WgcCaptureService.cs](Services/WgcCaptureService.cs) `ConvertSurfaceToSkBitmap`（L1006） |
+| WGC 资源释放 | [Services/WgcCaptureService.cs](Services/WgcCaptureService.cs) `Dispose`（L1165） |
+| 日志（目录 / 按时间命名 / 体积滚动 / 导出 / 保留策略） | [Services/AppLog.cs](Services/AppLog.cs) —— `LogDir` / `DiagFileName` / `DiagLogPath` / `NewExportPath` / `Info` / `ReadDiagLog` / `Error` / `TrimLocked` / `RetainRecentFiles` / `Initialize` |
 | GDI 抓帧（PrintWindow / BitBlt 回退） | `Services/GdiCaptureService.cs` `Capture()` |
 | OCR 服务与选项 | `Services/OcrService.cs`（约 L23-82 选项、L84-154 初始化、L156-213 `Recognize()`） |
 | OCR 线程数与 provider | `Services/OcrRuntime.cs`（约 L69-108） |

@@ -1,19 +1,23 @@
-using System.IO;
-using System.Text;
 using System.Windows;
 using System.Windows.Threading;
+using ScreenTranslator.Services;
 
 namespace ScreenTranslator;
 
 public partial class App : System.Windows.Application
 {
-    /// <summary>异常日志路径（与 exe 同目录，便于用户反馈时直接发送）</summary>
-    private static readonly string LogPath =
-        Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "error.log");
-
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        // ---- 日志系统初始化 ----
+        // 建立 logs/ 目录、清理超量的历史文件、对异常日志做一次体积滚动。
+        // 紧接着记一行「程序启动」，让本次运行的日志文件在启动瞬间就落盘 ——
+        // 文件名带本次启动时刻，所以「这次是哪次」一看文件名就知道。
+        AppLog.Initialize();
+        AppLog.Info($"程序启动（版本 {AppLog.AppVersion}，"
+                  + $"{AppLog.OsDescription} / {AppLog.ProcessBitness} / "
+                  + $"{(AppLog.IsElevated ? "管理员权限" : "普通权限")}）");
 
         // ---- 全局异常兜底 ----
         // 以前程序里没有任何全局异常处理，一旦 UI 线程抛异常
@@ -23,21 +27,21 @@ public partial class App : System.Windows.Application
         AppDomain.CurrentDomain.UnhandledException += OnDomainUnhandledException;
         TaskScheduler.UnobservedTaskException += (_, args) =>
         {
-            Log("UnobservedTaskException", args.Exception);
+            AppLog.Error("UnobservedTaskException", args.Exception);
             args.SetObserved();
         };
     }
 
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
-        Log("DispatcherUnhandledException", e.Exception);
+        AppLog.Error("DispatcherUnhandledException", e.Exception);
         ShowError(e.Exception);
         e.Handled = true;   // 尽量不让整个程序退出
     }
 
     private void OnDomainUnhandledException(object sender, UnhandledExceptionEventArgs e)
     {
-        Log("DomainUnhandledException", e.ExceptionObject as Exception);
+        AppLog.Error("DomainUnhandledException", e.ExceptionObject as Exception);
         // 非 UI 线程的致命异常无法阻止进程退出，只能先记下来
     }
 
@@ -46,23 +50,13 @@ public partial class App : System.Windows.Application
         try
         {
             MessageBox.Show(
-                $"程序遇到一个问题（已记录到 error.log）：\n\n{ex.GetType().Name}: {ex.Message}\n\n" +
-                "如果功能异常，可把 error.log 发给我定位。",
+                $"程序遇到一个问题（已记录到程序目录下的 logs 文件夹）：\n\n"
+                + $"{ex.GetType().Name}: {ex.Message}\n\n"
+                + $"日志目录：{AppLog.LogDir}\n\n"
+                + "如果功能异常，可点程序里的「导出诊断」按钮，"
+                + "它会一次性打包当时的状态、帧错误历史与本次运行的完整日志。",
                 "出错了", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         catch { /* 弹窗失败也不能再抛 */ }
-    }
-
-    private static void Log(string source, Exception? ex)
-    {
-        try
-        {
-            var sb = new StringBuilder();
-            sb.AppendLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {source}");
-            sb.AppendLine(ex?.ToString() ?? "(null)");
-            sb.AppendLine(new string('-', 60));
-            File.AppendAllText(LogPath, sb.ToString(), Encoding.UTF8);
-        }
-        catch { /* 记日志失败无所谓 */ }
     }
 }

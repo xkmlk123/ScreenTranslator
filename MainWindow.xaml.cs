@@ -1095,8 +1095,7 @@ public partial class MainWindow : Window
         if (_debugFrameSaved) return;
         try
         {
-            string debugPath = System.IO.Path.Combine(
-                AppDomain.CurrentDomain.BaseDirectory, "debug_frame.png");
+            string debugPath = AppLog.DebugFramePath;
             using var image = SkiaSharp.SKImage.FromBitmap(frame);
             using var data = image.Encode(SkiaSharp.SKEncodedImageFormat.Png, 90);
             using var fs = System.IO.File.OpenWrite(debugPath);
@@ -1236,7 +1235,7 @@ public partial class MainWindow : Window
         if (_useGdi) return;
         _lastWgcError = reason;
         System.Diagnostics.Debug.WriteLine(reason);
-        WgcCaptureService.AppendDiagLog($"[{DateTime.Now:HH:mm:ss}] {reason}");
+        AppLog.Info(reason);
 
         try { _capture?.Dispose(); } catch { }
         _capture = null;
@@ -1268,55 +1267,80 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 「导出诊断」：把状态栏全文 + 帧错误历史 + **本次运行的诊断日志** 写进
-    /// 「导出诊断.txt」，然后自动打开给用户看。
+    /// 「导出诊断」：把**导出时刻的环境与状态**、状态栏快照、帧错误历史、
+    /// 以及本次运行的完整日志，写进一个**新建的**导出文件，然后打开给用户看。
     ///
-    /// 状态栏是 TextBlock（WPF 默认不可选中），排查时只能靠截图，很麻烦。
-    /// 且剪贴板会被别的进程占用导致「复制失败」，所以改用文件通道：
+    /// 【导出不复写、不重置】每次导出都在 <c>logs/</c> 下新建
+    /// <c>导出诊断_&lt;导出时刻&gt;.txt</c>，**文件名本身就是导出时间**。任何既有文件
+    /// 都不会被改写或清空，历次导出全部保留 —— 早期版本固定写同一个文件名
+    /// （「导出诊断.txt」），第二次导出就把第一次的覆盖掉了。
+    ///
+    /// 【能看到「这个时间发生了什么」】导出文件开头是环境头：导出时刻、本次运行
+    /// 起点与已运行时长、运行时日志文件名、程序版本、系统、捕获后端、诊断开关、
+    /// 关键配置。正文里每一行日志都带 [时:分:秒]；且运行时日志按运行会话命名，
+    /// **整个文件就是本次运行**，不需要再按标记切分。
+    ///
+    /// 【为什么用文件而不是剪贴板】状态栏是 TextBlock（WPF 默认不可选中），
+    /// 排查时只能靠截图；剪贴板又会被别的进程占用导致「复制失败」。
     /// 日志文件是进程独有，写入必成功，排查时可直接读全文。
-    ///
-    /// 【为什么不再写「诊断日志.txt」】该文件是运行期由
-    /// <see cref="WgcCaptureService.AppendDiagLog"/> 持续追加的证据链。
-    /// 导出若覆盖写同一个文件，就会在用户最需要证据的那一刻（出问题时点导出）
-    /// 把整条链清空。现在导出改写独立的「导出诊断.txt」，并**把日志内容抄进去**，
-    /// 既保住实时证据，又让导出文件自成一体。
-    ///
-    /// 【只取本次运行】日志文件跨进程累积，抄全文会把历次运行的残留一起带出来，
-    /// 关键信息反而被淹没。因此传 currentRunOnly: true，只取最后一个
-    /// 「本次运行开始」标记之后的内容。
-    ///
-    /// 【覆盖语义】每次导出都整文件重写「导出诊断.txt」，不追加 ——
-    /// 下一次导出自动替换上一次的内容，不会越积越长。
-    /// 「诊断日志.txt」只由捕获服务追加，导出不再触碰它。
     /// </summary>
     private void CopyDiag_Click(object sender, RoutedEventArgs e)
     {
         var sb = new System.Text.StringBuilder();
-        sb.AppendLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] ---- 导出诊断 ----");
+
+        // ---- 环境头：先回答「这是什么时候、在什么环境下发生的」 ----
+        string ocrInfo = _ocr != null
+            ? $"（实际 {_ocr.UsedThreads} / {_ocr.UsedProvider}）"
+            : "";
+        sb.AppendLine("==== 导出诊断 ====");
+        sb.AppendLine($"导出时间    ：{DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        sb.AppendLine($"本次运行开始：{AppLog.RunStartedAt:yyyy-MM-dd HH:mm:ss}"
+                    + $"（已运行 {AppLog.FormatElapsed(AppLog.RunElapsed)}）");
+        sb.AppendLine($"运行时日志  ：{AppLog.DiagFileName}");
+        sb.AppendLine($"              完整路径：{AppLog.DiagLogPath}");
+        sb.AppendLine($"程序版本    ：{AppLog.AppVersion}");
+        sb.AppendLine($"系统        ：{AppLog.OsDescription} / {AppLog.ProcessBitness} / "
+                    + $"{(AppLog.IsElevated ? "管理员权限" : "普通权限")}");
+        sb.AppendLine($".NET        ：{AppLog.FrameworkDescription}");
+        sb.AppendLine($"捕获后端    ：{BuildCaptureBackendLine()}");
+        sb.AppendLine($"诊断开关    ：仅计数不取像素={(_skipReadback ? "开" : "关")}"
+                    + $" ｜ 强制 GDI={(_forceGdi ? "开" : "关")}"
+                    + $" ｜ 防截屏覆盖层={(_overlayCaptureSafe ? "生效" : "未生效")}");
+        sb.AppendLine($"关键配置    ：采样间隔={_config.CaptureIntervalMs}ms"
+                    + $" ｜ 置信度={_config.MinConfidence:F2}"
+                    + $" ｜ 识别框={_config.OcrBoxScale * 100:F0}%"
+                    + $" ｜ 推理线程={(_config.OcrThreads == 0 ? "自动" : _config.OcrThreads.ToString())}"
+                    + ocrInfo);
+        sb.AppendLine();
+
+        // ---- 状态栏快照（注意：这是「最后一帧」的快照，不是历史） ----
+        sb.AppendLine("---- 状态栏（最后一帧的快照）----");
         sb.AppendLine(StatusText.Text ?? "");
 
+        // ---- 帧错误历史 ----
         var hist = WgcCaptureService.ErrorHistory;
         if (hist.Count > 0)
         {
-            sb.AppendLine("---- 帧错误历史 ----");
+            sb.AppendLine("---- 帧错误历史（本进程，最多 300 条）----");
             foreach (var h in hist) sb.AppendLine(h);
         }
 
-        // 只取「本次运行」那一段：日志文件跨进程累积，
-        // 把历次运行的残留一并抄进来只会淹没关键信息
-        var live = WgcCaptureService.ReadDiagLog(currentRunOnly: true);
+        // ---- 本次运行的日志全文 ----
+        // 运行时日志按运行会话命名，整个文件就是本次运行，直接全文抄入即可
+        var live = AppLog.ReadDiagLog();
         if (!string.IsNullOrWhiteSpace(live))
         {
             sb.AppendLine();
-            sb.AppendLine($"---- 本次运行的诊断日志（{WgcCaptureService.DiagLogFileName}）----");
+            sb.AppendLine($"---- 运行时日志全文（{AppLog.DiagFileName}）----");
             sb.AppendLine(live.TrimEnd());
         }
 
-        // 写独立文件（WriteAllText 自带截断）；实时日志不受影响
+        // ---- 写新文件：绝不覆盖任何既有导出 ----
+        string path;
         try
         {
-            System.IO.File.WriteAllText(WgcCaptureService.ExportDiagPath, sb.ToString(),
-                System.Text.Encoding.UTF8);
+            path = AppLog.NewExportPath();
+            System.IO.File.WriteAllText(path, sb.ToString(), System.Text.Encoding.UTF8);
         }
         catch (Exception ex)
         {
@@ -1325,16 +1349,39 @@ public partial class MainWindow : Window
             return;
         }
 
+        // 顺手按保留策略清理更早的导出（只删本程序自己生成的 logs/导出诊断_*.txt）
+        AppLog.RetainRecentFiles();
+
         // 自动打开给用户看（系统默认 .txt 程序，一般是记事本）
         try
         {
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
             {
-                FileName = WgcCaptureService.ExportDiagPath,
+                FileName = path,
                 UseShellExecute = true
             });
         }
         catch { /* 打开失败不影响已有文件，忽略 */ }
+    }
+
+    /// <summary>导出头用：当前走的是哪条捕获后端、什么设备、计数各是多少。</summary>
+    private string BuildCaptureBackendLine()
+    {
+        if (_useGdi)
+        {
+            string why = _lastWgcError.Length > 0 ? $"（WGC 失败：{_lastWgcError}）" : "";
+            string counters = _gdiCapture != null
+                ? $" ｜ PrintWindow {_gdiCapture.PrintWindowOkCount}"
+                  + $" / BitBlt {_gdiCapture.BitBltFallbackCount}"
+                : "";
+            return $"GDI{why}{counters}";
+        }
+
+        if (_capture != null)
+            return $"WGC（到达 {_capture.FrameArrivedCount} / 转图 {_capture.FrameConvertedCount}"
+                 + $"，设备 {_capture.DeviceKind}/{_capture.AdapterName}）";
+
+        return "未启动（尚未点「开启翻译」）";
     }
 
     private void Exit_Click(object sender, RoutedEventArgs e) => Close();
